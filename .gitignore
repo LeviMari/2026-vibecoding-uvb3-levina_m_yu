@@ -1,0 +1,16 @@
+# Секреты и данные пользователей
+.env
+data.json
+data.*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Системный мусор
+.DS_Store
+.idea/
+.vscode/
+*.mov

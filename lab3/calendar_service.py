@@ -14,7 +14,7 @@ import httpx
 from icalendar import Calendar
 import recurring_ical_events
 
-from config import TZ
+from dates import get_tz, get_tz_name
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ WORK_END = time(19, 0)
 WORK_HOURS = 9.0
 
 # user_id -> (expires_at, events)
-_cache: dict[int, tuple[datetime, list[dict[str, Any]]]] = {}
+_cache: dict[tuple[int, str], tuple[datetime, list[dict[str, Any]]]] = {}
 
 
 class CalendarError(Exception):
@@ -40,8 +40,8 @@ def _to_local_dt(value: Any) -> datetime | None:
     raw = value.dt if hasattr(value, "dt") else value
     if isinstance(raw, datetime):
         if raw.tzinfo is None:
-            return raw.replace(tzinfo=TZ)
-        return raw.astimezone(TZ)
+            return raw.replace(tzinfo=get_tz())
+        return raw.astimezone(get_tz())
     return None
 
 
@@ -121,13 +121,14 @@ async def validate_source(url: str | None = None, ics_text: str | None = None) -
         ics_text = await download_ics(url)
     if not ics_text:
         raise CalendarError("Пустой календарь.")
-    now = datetime.now(TZ)
+    now = datetime.now(get_tz())
     parse_ics(ics_text, now - timedelta(days=1), now + timedelta(days=30))
     return ics_text
 
 
 def invalidate_cache(user_id: int) -> None:
-    _cache.pop(int(user_id), None)
+    for key in [k for k in _cache if k[0] == int(user_id)]:
+        _cache.pop(key, None)
 
 
 async def events_for_user(
@@ -142,8 +143,9 @@ async def events_for_user(
     if not url and not stored_ics:
         return []
 
-    now = datetime.now(TZ)
-    cached = _cache.get(user_id)
+    now = datetime.now(get_tz())
+    cache_key = (user_id, get_tz_name())
+    cached = _cache.get(cache_key)
     if cached and cached[0] > now:
         return [e for e in cached[1] if e["start"] < end and e["end"] > start]
 
@@ -157,7 +159,7 @@ async def events_for_user(
         window_start = now - timedelta(days=7)
         window_end = now + timedelta(days=21)
         all_events = parse_ics(ics_text, window_start, window_end)
-        _cache[user_id] = (now + CACHE_TTL, all_events)
+        _cache[cache_key] = (now + CACHE_TTL, all_events)
         return [e for e in all_events if e["start"] < end and e["end"] > start]
     except CalendarError:
         raise
@@ -185,8 +187,8 @@ def format_event_line(event: dict[str, Any]) -> str:
 
 
 def _overlap_hours(event: dict[str, Any], day: date) -> float:
-    window_start = datetime.combine(day, WORK_START, tzinfo=TZ)
-    window_end = datetime.combine(day, WORK_END, tzinfo=TZ)
+    window_start = datetime.combine(day, WORK_START, tzinfo=get_tz())
+    window_end = datetime.combine(day, WORK_END, tzinfo=get_tz())
     a = max(event["start"], window_start)
     b = min(event["end"], window_end)
     if b <= a:
@@ -223,8 +225,8 @@ async def day_occupancy(user: dict[str, Any], days: list[date]) -> dict[str, dic
         return {}
     if not days:
         return {}
-    start = datetime.combine(min(days), time(0, 0), tzinfo=TZ)
-    end = datetime.combine(max(days) + timedelta(days=1), time(0, 0), tzinfo=TZ)
+    start = datetime.combine(min(days), time(0, 0), tzinfo=get_tz())
+    end = datetime.combine(max(days) + timedelta(days=1), time(0, 0), tzinfo=get_tz())
     try:
         events = await events_for_user(user, start, end)
     except CalendarError:

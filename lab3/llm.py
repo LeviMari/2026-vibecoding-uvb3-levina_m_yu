@@ -14,7 +14,8 @@ from typing import Any
 
 import httpx
 
-from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, TIMEZONE_NAME
+from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL
+from dates import get_tz_name
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +233,7 @@ async def extract_meeting(text: str, user_name: str, today: str) -> dict[str, An
             "В tasks клади только задачи, где ответственный — этот человек, "
             "либо общие задачи без конкретного ответственного (owner=unassigned). "
             "Не бери чужие персональные поручения. "
-            f"Сегодня {today}, часовой пояс {TIMEZONE_NAME}. "
+            f"Сегодня {today}, часовой пояс {get_tz_name()}. "
             "Относительные сроки («к пятнице», «на следующей неделе») переводи в абсолютные даты. "
             "Если даты встречи нет в тексте — date=null."
         ),
@@ -250,7 +251,7 @@ async def extract_task(text: str, today: str) -> dict[str, Any]:
             '{"title": "краткое название", "deadline": "YYYY-MM-DD или null", '
             '"priority": "high|medium|low"}\n'
             "priority=high если срочно/важно/ASAP, low если когда-нибудь/не горит, иначе medium. "
-            f"Сегодня {today}, часовой пояс {TIMEZONE_NAME}. "
+            f"Сегодня {today}, часовой пояс {get_tz_name()}. "
             "Относительные сроки переводи в абсолютную дату."
         ),
         user=text,
@@ -286,7 +287,7 @@ async def match_task_update(text: str, tasks: list[dict[str, Any]], today: str) 
             "(несколько похожих или слишком общее описание). "
             "Если совпадение однозначное — один id и ambiguous=false. "
             "Если фраза не относится ни к одной задаче из списка — task_ids: [] и ambiguous=false. "
-            f"Сегодня {today}, TZ {TIMEZONE_NAME}. "
+            f"Сегодня {today}, TZ {get_tz_name()}. "
             "Для postpone вычисли new_deadline."
         ),
         user=f"Задачи: {json.dumps(payload, ensure_ascii=False)}\nФраза: {text}",
@@ -375,7 +376,7 @@ async def build_week_plan(
             "comment — одно короткое предложение до 12 слов. "
             "comment пиши от лица ассистента в женском роде или безлично. "
             f"{occ_text}\n"
-            f"Сегодня {today}, TZ {TIMEZONE_NAME}."
+            f"Сегодня {today}, TZ {get_tz_name()}."
         ),
         user=json.dumps(payload, ensure_ascii=False),
     )

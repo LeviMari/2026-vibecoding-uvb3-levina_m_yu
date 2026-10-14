@@ -108,19 +108,30 @@ def deadline_ping_keyboard(task_id: str) -> InlineKeyboardMarkup:
 
 
 def settings_keyboard(enabled: bool, meeting_reminders: bool = True) -> InlineKeyboardMarkup:
-    label = "🔕 Выключить уведомления" if enabled else "🔔 Включить уведомления"
+    label = "Выключить уведомления" if enabled else "Включить уведомления"
     meet = (
-        "🔕 Выключить напоминания после встреч"
+        "Выключить напоминания после встреч"
         if meeting_reminders
-        else "🔔 Включить напоминания после встреч"
+        else "Включить напоминания после встреч"
     )
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("Сменить часовой пояс", callback_data="st:tz")],
             [InlineKeyboardButton(label, callback_data="st:toggle")],
             [InlineKeyboardButton(meet, callback_data="st:meetings")],
         ]
     )
 
+
+def timezone_keyboard(current: str | None = None) -> InlineKeyboardMarkup:
+    """Выбор часового пояса: по одному городу в строке, текущий отмечен галочкой."""
+    from dates import TIMEZONE_CHOICES, tz_label
+
+    rows = []
+    for name, _title in TIMEZONE_CHOICES:
+        mark = "✓ " if name == current else ""
+        rows.append([InlineKeyboardButton(f"{mark}{tz_label(name)}", callback_data=f"tz:{name}")])
+    return InlineKeyboardMarkup(rows)
 
 def deadline_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 import calendar_service
 import llm
-from config import ADMIN_ID, MAX_TXT_BYTES, TZ
+from config import ADMIN_ID, MAX_TXT_BYTES
 from dates import (
     DAY_KEYS,
     DAY_TITLES,
@@ -24,6 +24,12 @@ from dates import (
     this_week_end,
     today,
     week_bounds,
+    TIMEZONE_CHOICES,
+    get_tz,
+    get_tz_name,
+    set_current_tz,
+    tz_label,
+    valid_tz,
 )
 import storage
 from export import ExportError, build_admin_xlsx, build_tasks_xlsx, export_filename
@@ -45,6 +51,7 @@ from keyboards import (
     open_tasks_keyboard,
     review_keyboard,
     settings_keyboard,
+    timezone_keyboard,
     WOULD_USE_OPTIONS,
     survey_invite_keyboard,
     survey_would_use_keyboard,
@@ -91,7 +98,7 @@ HELP_TEXT = (
     "/export — выгрузка в Excel\n"
     "/feedback — отзыв\n"
     "/survey — короткий опрос о боте\n"
-    "/settings — уведомления\n"
+    "/settings — часовой пояс и уведомления\n"
     "/setname — как тебя зовут на встречах\n"
     "/help — эта подсказка"
 )
@@ -275,7 +282,8 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     user["name"] = name
     await store.save_user(user)
     await update.message.reply_text(
-        f"Запомнила: {name}. Можно менять командой /setname.\n\n{HELP_TEXT}",
+        f"Запомнила: {name}. Можно менять командой /setname.\n"
+        f"Часовой пояс: {tz_label()} — сменить можно в /settings.\n\n{HELP_TEXT}",
         reply_markup=main_menu_keyboard(),
     )
     return ConversationHandler.END
@@ -930,7 +938,7 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     parts = [f"<b>Сегодня, {format_ru_date(d0)}</b>"]
 
     if _has_calendar(user):
-        start = datetime.combine(d0, time(0, 0), tzinfo=TZ)
+        start = datetime.combine(d0, time(0, 0), tzinfo=get_tz())
         end = start + timedelta(days=1)
         try:
             events = await calendar_service.events_for_user(user, start, end)
@@ -1049,20 +1057,14 @@ async def review_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _user(update)
-    enabled = bool(user.get("notifications_enabled", True))
-    meetings_on = bool(user.get("meeting_reminders_enabled", True))
-    state = "включены" if enabled else "выключены"
-    meet_state = "включены" if meetings_on else "выключены"
     await update.message.reply_text(
-        f"🔔 Уведомления сейчас {state}.\n"
-        f"Напоминания после встреч сейчас {meet_state}.\n"
-        "Будни 9:00 — сводка (в понедельник вместо неё итоги недели).\n"
-        "За день до дедлайна 18:00 — напоминание.\n"
-        "В день дедлайна 15:00 — пинг, если задача ещё открыта.\n"
-        "Пятница 17:00 — забытые задачи (открыты больше 14 дней).",
-        reply_markup=settings_keyboard(enabled, meetings_on),
+        _settings_text(user),
+        parse_mode=HTML,
+        reply_markup=settings_keyboard(
+            bool(user.get("notifications_enabled", True)),
+            bool(user.get("meeting_reminders_enabled", True)),
+        ),
     )
-
 
 async def calendar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await store.get_user(update.effective_user.id, update.effective_chat.id)
@@ -1264,15 +1266,16 @@ def _meeting_source(data: str) -> str | None:
 
 
 def _settings_text(user: dict) -> str:
-    enabled = bool(user.get("notifications_enabled", True))
+    on = bool(user.get("notifications_enabled", True))
     meetings_on = bool(user.get("meeting_reminders_enabled", True))
-    state = "включены" if enabled else "выключены"
-    meet_state = "включены" if meetings_on else "выключены"
     return (
-        f"Уведомления теперь {state}.\n"
-        f"Напоминания после встреч теперь {meet_state}."
+        "<b>Настройки</b>\n\n"
+        f"Часовой пояс: <b>{esc(tz_label())}</b>\n"
+        f"Уведомления: <b>{'включены' if on else 'выключены'}</b>\n"
+        f"Напоминания после встреч: <b>{'включены' if meetings_on else 'выключены'}</b>\n\n"
+        "<i>По будням в 9:00 — сводка на день (в понедельник — итоги недели), "
+        "в 15:00 — напоминание о задачах со сроком сегодня. Время — по твоему поясу.</i>"
     )
-
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -1393,6 +1396,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await store.save_user(user)
         await query.edit_message_text(
             _settings_text(user),
+            parse_mode=HTML,
             reply_markup=settings_keyboard(
                 bool(user["notifications_enabled"]),
                 bool(user.get("meeting_reminders_enabled", True)),
@@ -1405,6 +1409,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await store.save_user(user)
         await query.edit_message_text(
             _settings_text(user),
+            parse_mode=HTML,
             reply_markup=settings_keyboard(
                 bool(user.get("notifications_enabled", True)),
                 bool(user["meeting_reminders_enabled"]),
@@ -1453,6 +1458,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await storage.save_survey_answer(user["user_id"], "would_use", label)
         await _survey_finish(query.message, user)
         await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    if data == "st:tz":
+        await query.edit_message_text(
+            f"Сейчас: <b>{esc(tz_label())}</b>\nВыбери свой часовой пояс:",
+            parse_mode=HTML,
+            reply_markup=timezone_keyboard(get_tz_name()),
+        )
+        return
+
+    if data.startswith("tz:"):
+        name = data.split(":", 1)[1]
+        if not valid_tz(name):
+            await query.edit_message_text("Не знаю такой часовой пояс. Открой /settings ещё раз.")
+            return
+        await storage.set_user_tz(user["user_id"], name)
+        set_current_tz(name)
+        calendar_service.invalidate_cache(user["user_id"])  # пересчитать время встреч
+        await query.edit_message_text(
+            _settings_text(user),
+            parse_mode=HTML,
+            reply_markup=settings_keyboard(
+                bool(user.get("notifications_enabled", True)),
+                bool(user.get("meeting_reminders_enabled", True)),
+            ),
+        )
         return
 
     if data == "cal:update":

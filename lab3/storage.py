@@ -138,6 +138,7 @@ def _user_from_db(user_id: int) -> dict[str, Any] | None:
         "awaiting": row["awaiting"] or "",
         "pending_new_task": pending_task,
         "created_at": row["created_at"],
+        "timezone": row["timezone"] if "timezone" in row.keys() else None,
     }
 
 
@@ -323,7 +324,9 @@ class Storage:
         """Личная статистика для /stats — выборки только параметризованные."""
         from datetime import timedelta
 
-        today = datetime.now(TZ).date()
+        from dates import today as _today
+
+        today = _today()
         week_start = today - timedelta(days=today.weekday())
         month_ago = (today - timedelta(days=30)).isoformat()
         week_start_s = week_start.isoformat()
@@ -468,6 +471,17 @@ class Storage:
             "questions": int(questions["n"] if questions else 0),
             "feedback": [dict(r) for r in feedback_rows],
         }
+
+
+# ---------- Часовой пояс пользователя ----------
+
+def get_user_tz(user_id: int) -> str | None:
+    row = query_one("SELECT timezone FROM users WHERE user_id = ?", (int(user_id),))
+    return row["timezone"] if row and row["timezone"] else None
+
+
+async def set_user_tz(user_id: int, name: str) -> None:
+    execute("UPDATE users SET timezone = ? WHERE user_id = ?", (name, int(user_id)))
 
 
 # ---------- Опрос тестировщиков и статистика для Лабы 3 ----------

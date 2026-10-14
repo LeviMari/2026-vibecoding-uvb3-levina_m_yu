@@ -1,4 +1,8 @@
-"""Автоматические уведомления через JobQueue (по TIMEZONE из .env)."""
+"""Автоматические уведомления через JobQueue.
+
+У каждого пользователя свой часовой пояс, поэтому вместо фиксированного расписания
+бот раз в час проверяет, у кого сейчас нужный местный час (9:00, 15:00, 19:00).
+"""
 
 from __future__ import annotations
 
@@ -9,9 +13,8 @@ from telegram.ext import ContextTypes
 
 import calendar_service
 import llm
-from config import TZ
-from dates import format_ru_date, today
-from handlers import _group_open_tasks, _review_payload, current_week_plan, forgotten_markup, ping_markup
+from dates import format_ru_date, get_tz, set_current_tz, today
+from handlers import _group_open_tasks, _review_payload, current_week_plan, ping_markup
 from keyboards import review_keyboard
 from storage import now_iso, store
 
@@ -20,24 +23,6 @@ logger = logging.getLogger(__name__)
 
 def _chat_id(user: dict) -> int:
     return int(user.get("chat_id") or user["user_id"])
-
-
-async def morning_digest(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Будни 9:00: в понедельник — итоги и план, в остальные дни — сводка на день."""
-    is_monday = today().weekday() == 0
-    users = await store.all_users()
-    for user in users:
-        if not user.get("notifications_enabled", True):
-            continue
-        chat_id = _chat_id(user)
-        try:
-            if is_monday:
-                # В понедельник — тот же формат, что у /review: итоги + планы.
-                await _send_monday_review(context, chat_id, user)
-            else:
-                await _send_day_digest(context, chat_id, user)
-        except Exception:
-            logger.exception("morning job failed for user %s", user.get("user_id"))
 
 
 async def _send_monday_review(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: dict) -> None:
@@ -61,7 +46,7 @@ async def _meetings_today_lines(user: dict) -> list[str]:
     if not (user.get("calendar_url") or user.get("calendar_ics")):
         return []
     d0 = today()
-    start = datetime.combine(d0, time(0, 0), tzinfo=TZ)
+    start = datetime.combine(d0, time(0, 0), tzinfo=get_tz())
     end = start + timedelta(days=1)
     try:
         events = await calendar_service.events_for_user(user, start, end)
@@ -112,92 +97,13 @@ async def _send_day_digest(context: ContextTypes.DEFAULT_TYPE, chat_id: int, use
     await context.bot.send_message(chat_id, text)
 
 
-async def eve_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """18:00: напоминание о задачах, у которых дедлайн завтра."""
-    tomorrow = (today() + timedelta(days=1)).isoformat()
-    users = await store.all_users()
-    for user in users:
-        if not user.get("notifications_enabled", True):
-            continue
-        due = [
-            t
-            for t in user.get("tasks") or []
-            if t.get("status") != "done" and t.get("deadline") == tomorrow
-        ]
-        if not due:
-            continue
-        lines = "\n".join(f"• {t['title']}" for t in due)
-        try:
-            await context.bot.send_message(
-                _chat_id(user),
-                f"⏰ Завтра дедлайн ({format_ru_date(tomorrow)}):\n{lines}",
-            )
-        except Exception:
-            logger.exception("eve reminder failed for %s", user.get("user_id"))
-
-
-async def deadline_pings(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """15:00: пинг по открытым задачам с дедлайном сегодня."""
-    d0 = today().isoformat()
-    users = await store.all_users()
-    for user in users:
-        if not user.get("notifications_enabled", True):
-            continue
-        due = [
-            t
-            for t in user.get("tasks") or []
-            if t.get("status") != "done" and t.get("deadline") == d0
-        ]
-        for task in due:
-            try:
-                await context.bot.send_message(
-                    _chat_id(user),
-                    f"📌 Сегодня срок: {task['title']}\nУспеешь закрыть?",
-                    reply_markup=ping_markup(task["id"]),
-                )
-            except Exception:
-                logger.exception("deadline ping failed for %s", user.get("user_id"))
-
-
-async def forgotten_tasks(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Пятница 17:00: открытые задачи без изменений больше 14 дней."""
-    cutoff = (datetime.now(TZ) - timedelta(days=14)).isoformat(timespec="seconds")
-    users = await store.all_users()
-    for user in users:
-        if not user.get("notifications_enabled", True):
-            continue
-        try:
-            stale = await store.forgotten_open_tasks(user["user_id"], cutoff)
-        except Exception:
-            logger.exception("forgotten query failed for %s", user.get("user_id"))
-            continue
-        # Не спамим: максимум 5 самых давних задач за раз.
-        stale.sort(key=lambda t: t.get("updated_at") or "")
-        if len(stale) > 5:
-            try:
-                await context.bot.send_message(
-                    _chat_id(user),
-                    f"🕰 Без изменений больше 14 дней висят {len(stale)} задач. Покажу 5 самых давних.",
-                )
-            except Exception:
-                logger.exception("forgotten summary failed for %s", user.get("user_id"))
-        for task in stale[:5]:
-            try:
-                await context.bot.send_message(
-                    _chat_id(user),
-                    f"🕰 Задача висит без изменений больше 14 дней:\n{task['title']}\nЕщё актуально?",
-                    reply_markup=forgotten_markup(task["id"]),
-                )
-            except Exception:
-                logger.exception("forgotten ping failed for %s", user.get("user_id"))
-
-
 async def after_meetings(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Каждые 10 минут: встреча длительностью от 15 минут закончилась только что."""
-    now = datetime.now(TZ)
-    window_start = now - timedelta(minutes=10)
     users = await store.all_users()
     for user in users:
+        set_current_tz(user.get("timezone"))
+        now = datetime.now(get_tz())
+        window_start = now - timedelta(minutes=10)
         if not user.get("notifications_enabled", True):
             continue
         if not user.get("meeting_reminders_enabled", True):
@@ -261,16 +167,57 @@ async def send_survey_invites(bot, candidates: list[dict]) -> int:
     return sent
 
 
-async def survey_invites(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Каждый день в 19:00: пригласить тех, кто начал пользоваться ботом минимум 6 часов назад."""
+async def _morning_for(context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
+    """9:00 по будням: в понедельник итоги и план (как /review), в остальные дни — сводка."""
+    if today().weekday() == 0:
+        await _send_monday_review(context, _chat_id(user), user)
+    else:
+        await _send_day_digest(context, _chat_id(user), user)
+
+
+async def _deadline_ping_for(context: ContextTypes.DEFAULT_TYPE, user: dict) -> None:
+    """15:00: пинг по открытым задачам со сроком сегодня."""
+    d0 = today().isoformat()
+    for task in user.get("tasks") or []:
+        if task.get("status") != "done" and task.get("deadline") == d0:
+            await context.bot.send_message(
+                _chat_id(user),
+                f"📌 Сегодня срок: {task['title']}\nУспеешь закрыть?",
+                reply_markup=ping_markup(task["id"]),
+            )
+
+
+async def hourly_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Раз в час: каждому пользователю — уведомления по ЕГО местному времени."""
     import storage
 
+    users = await store.all_users()
     try:
-        candidates = await storage.survey_candidates(min_hours=6, min_actions=3)
+        # Кого пора пригласить в опрос (начал пользоваться >= 6 часов назад, >= 3 действий).
+        survey_ids = {
+            int(c["user_id"])
+            for c in await storage.survey_candidates(min_hours=6, min_actions=3)
+        }
     except Exception:
         logger.exception("survey candidates failed")
-        return
-    await send_survey_invites(context.bot, candidates)
+        survey_ids = set()
+
+    for user in users:
+        set_current_tz(user.get("timezone"))
+        local = datetime.now(get_tz())
+        hour, weekday = local.hour, local.weekday()
+        try:
+            if hour == 19 and int(user["user_id"]) in survey_ids:
+                await send_survey_invites(context.bot, [user])
+            if not user.get("notifications_enabled", True):
+                continue
+            if hour == 9 and weekday < 5:
+                await _morning_for(context, user)
+            elif hour == 15:
+                await _deadline_ping_for(context, user)
+        except Exception:
+            logger.exception("hourly notification failed for user %s", user.get("user_id"))
+    set_current_tz(None)
 
 
 def schedule(application) -> None:
@@ -278,11 +225,9 @@ def schedule(application) -> None:
     if jq is None:
         logger.error("JobQueue недоступна — установи python-telegram-bot[job-queue]")
         return
-    # В python-telegram-bot 0 = воскресенье, поэтому будни Пн–Пт — это 1..5.
-    jq.run_daily(morning_digest, time=time(9, 0, tzinfo=TZ), days=(1, 2, 3, 4, 5), name="morning")
-    jq.run_daily(eve_reminders, time=time(18, 0, tzinfo=TZ), name="eve")
-    jq.run_daily(deadline_pings, time=time(15, 0, tzinfo=TZ), name="ping")
-    jq.run_daily(forgotten_tasks, time=time(17, 0, tzinfo=TZ), days=(5,), name="forgotten")
+    # Запуск ровно в начале каждого часа (плюс 5 секунд запаса).
+    now = datetime.now(get_tz())
+    first = (60 - now.minute) * 60 - now.second + 5
+    jq.run_repeating(hourly_tick, interval=3600, first=first, name="hourly_tick")
     jq.run_repeating(after_meetings, interval=600, first=60, name="after_meeting")
-    jq.run_daily(survey_invites, time=time(19, 0, tzinfo=TZ), name="survey_invites")
-    logger.info("Расписание уведомлений включено (%s)", TZ)
+    logger.info("Расписание уведомлений включено: по местному времени каждого пользователя")

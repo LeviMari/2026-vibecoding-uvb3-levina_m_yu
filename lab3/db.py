@@ -359,6 +359,8 @@ def init_db() -> None:
         # Опрос тестировщиков (Лаба 3): когда пригласили и когда прошли.
         _add_column_if_missing("users", "survey_invited_at", "TEXT")
         _add_column_if_missing("users", "survey_done_at", "TEXT")
+        # Часовой пояс пользователя (NULL — пояс по умолчанию из TIMEZONE).
+        _add_column_if_missing("users", "timezone", "TEXT")
         get_conn().commit()
     _migrate_from_json()
     logger.info("База данных готова")

@@ -9,6 +9,7 @@ import sys
 from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
+    TypeHandler,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
@@ -89,6 +90,15 @@ BOT_COMMANDS = [
 ]
 
 
+async def apply_user_timezone(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Перед любой обработкой: включить часовой пояс этого пользователя (см. dates.get_tz)."""
+    import storage
+    from dates import set_current_tz
+
+    user = update.effective_user if isinstance(update, Update) else None
+    set_current_tz(storage.get_user_tz(user.id) if user else None)
+
+
 async def post_init(application: Application) -> None:
     """После запуска: регистрируем команды, чтобы они появились в кнопке «Меню»."""
     try:
@@ -124,6 +134,8 @@ def main() -> None:
         persistent=False,
     )
 
+    # group=-1 — выполняется раньше всех остальных обработчиков.
+    application.add_handler(TypeHandler(Update, apply_user_timezone), group=-1)
     application.add_handler(name_conversation)
     application.add_handler(CommandHandler("help", help_cmd))
     application.add_handler(CommandHandler("tasks", tasks_cmd))
@@ -147,7 +159,7 @@ def main() -> None:
     application.add_error_handler(on_error)
 
     schedule(application)
-    logger.info("Бот запускается, часовой пояс %s", TIMEZONE_NAME)
+    logger.info("Бот запускается, часовой пояс по умолчанию %s", TIMEZONE_NAME)
     # Python 3.14+ больше не создаёт цикл событий автоматически,
     # а python-telegram-bot 21 на это рассчитывает — создаём его вручную.
     asyncio.set_event_loop(asyncio.new_event_loop())

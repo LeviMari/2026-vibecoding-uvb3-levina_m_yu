@@ -14,3 +14,10 @@ venv/
 .idea/
 .vscode/
 *.mov
+*.db
+*.db-wal
+*.db-shm
+*.bak
+*.bak2
+*.migrated
+*.xlsx

@@ -546,6 +546,20 @@ async def survey_candidates(
     return [dict(r) for r in rows]
 
 
+def find_users(text: str) -> list[dict[str, Any]]:
+    """Поиск пользователя для админа: по Telegram ID или по части имени (без учёта регистра)."""
+    text = (text or "").strip()
+    rows = [dict(r) for r in query("SELECT user_id, chat_id, name, survey_done_at FROM users")]
+    if text.isdigit():
+        return [r for r in rows if int(r["user_id"]) == int(text)]
+    needle = text.lower()
+    return [r for r in rows if needle and needle in (r["name"] or "").lower()]
+
+
+def all_user_names() -> list[dict[str, Any]]:
+    return [dict(r) for r in query("SELECT user_id, name, survey_done_at FROM users ORDER BY name")]
+
+
 async def survey_overview() -> dict[str, Any]:
     done = query_one("SELECT COUNT(*) AS n FROM users WHERE survey_done_at IS NOT NULL")
     would = query(

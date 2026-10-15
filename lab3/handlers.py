@@ -1490,12 +1490,43 @@ async def admin_stt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def admin_invite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ручная рассылка приглашения в опрос всем, кто ещё его не прошёл (только админ)."""
+    """Приглашение в опрос (только админ).
+
+    /admin_invite — всем, кто пользовался ботом и ещё не прошёл опрос;
+    /admin_invite <имя или ID> — одному конкретному человеку.
+    """
     user = await _user(update)
     if not ADMIN_ID or int(user["user_id"]) != int(ADMIN_ID):
         await update.message.reply_text("Эта команда только для администратора.")
         return
     from jobs import send_survey_invites
+
+    # /admin_invite Анна (или Telegram ID) — пригласить конкретного человека.
+    if context.args:
+        query_text = " ".join(context.args)
+        found = storage.find_users(query_text)
+        if len(found) != 1:
+            people = "\n".join(
+                f"• {esc(u['name'] or 'без имени')} — <code>{u['user_id']}</code>"
+                + (" (опрос пройден)" if u.get("survey_done_at") else "")
+                for u in (found or storage.all_user_names())
+            )
+            head = "Нашла несколько человек" if found else f"Не нашла «{esc(query_text)}»"
+            await update.message.reply_text(
+                f"{head}. Уточни имя или укажи ID, например <code>/admin_invite 123456</code>:\n\n{people}",
+                parse_mode=HTML,
+            )
+            return
+        target = found[0]
+        if target.get("survey_done_at"):
+            await update.message.reply_text(f"{target['name'] or target['user_id']} уже прошёл(-ла) опрос.")
+            return
+        sent = await send_survey_invites(context.bot, [target])
+        await update.message.reply_text(
+            f"Отправила приглашение: {target['name'] or target['user_id']}." if sent
+            else "Не получилось отправить — возможно, человек остановил бота."
+        )
+        return
 
     candidates = await storage.survey_candidates(min_hours=0, min_actions=1, include_invited=True)
     # Себе приглашение не шлём — админ может пройти опрос командой /survey.

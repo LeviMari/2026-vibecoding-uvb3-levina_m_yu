@@ -174,22 +174,26 @@ MENU_TODAY = "Сегодня"
 MENU_TASKS = "Задачи"
 MENU_WEEK = "Неделя"
 MENU_MEETINGS = "Встречи"
-MENU_REVIEW = "Итоги недели"
+MENU_REVIEW = "Итоги"
+# Старая подпись кнопки — у кого-то в Telegram ещё осталась прежняя клавиатура.
+MENU_REVIEW_OLD = "Итоги недели"
 MENU_HELP = "Помощь"
 MENU_CALENDAR = "Календарь"
 MENU_SHEET = "Таблица"
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Постоянное меню: самые частые действия в три ряда, без ярких эмодзи.
+    """Постоянное меню: два компактных ряда по 4 кнопки, без ярких эмодзи.
+
+    Размер и цвет кнопок задаёт приложение Telegram (тема оформления), бот может
+    влиять только на число рядов и подписи — поэтому меню сделано в два ряда.
 
     Кнопку «Календарь» добавили по отзыву: коллега не нашла, как подключить календарь.
     """
     return ReplyKeyboardMarkup(
         [
-            [MENU_TODAY, MENU_TASKS, MENU_WEEK],
-            [MENU_MEETINGS, MENU_REVIEW],
-            [MENU_CALENDAR, MENU_SHEET, MENU_HELP],
+            [MENU_TODAY, MENU_TASKS, MENU_WEEK, MENU_MEETINGS],
+            [MENU_REVIEW, MENU_CALENDAR, MENU_SHEET, MENU_HELP],
         ],
         resize_keyboard=True,
         is_persistent=True,

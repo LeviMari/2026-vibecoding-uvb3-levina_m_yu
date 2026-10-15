@@ -40,6 +40,7 @@ from keyboards import (
     MENU_HELP,
     MENU_MEETINGS,
     MENU_REVIEW,
+    MENU_REVIEW_OLD,
     MENU_SHEET,
     MENU_TASKS,
     MENU_TODAY,
@@ -336,7 +337,7 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # (у одного сообщения может быть только одна клавиатура).
     await update.message.reply_text(
         f"Запомнила: {name} (сменить — /setname).\n"
-        "👇 Внизу экрана теперь меню: Сегодня, Задачи, Неделя, Встречи, Итоги недели, Календарь, Таблица.",
+        "👇 Внизу экрана теперь меню: Сегодня, Задачи, Неделя, Встречи, Итоги, Календарь, Таблица.",
         reply_markup=main_menu_keyboard(),
     )
     await update.message.reply_text(onboarding_text(name), reply_markup=onboarding_keyboard())
@@ -1865,6 +1866,7 @@ MENU_ACTIONS.update(
         MENU_WEEK: week_cmd,
         MENU_MEETINGS: meetings_cmd,
         MENU_REVIEW: review_cmd,
+        MENU_REVIEW_OLD: review_cmd,
         MENU_HELP: help_cmd,
         MENU_CALENDAR: calendar_cmd,
         MENU_SHEET: sheets_cmd,

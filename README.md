@@ -18,7 +18,7 @@ Telegram-бот [@itmoftmi_lmy_bot](https://t.me/itmoftmi_lmy_bot) превра�
 |---|---|---|---|
 | 1 | Первый бот без программирования | [lab1/lab1_report.md](lab1/lab1_report.md) | ✅ |
 | 2 | Подключение бота к данным: SQLite, Google Календарь, Excel | [lab2/lab2_report.md](lab2/lab2_report.md) | ✅ |
-| 3 | Деплой и сбор обратной связи | — | планируется |
+| 3 | Деплой на Railway, обратная связь, улучшения: онбординг, Google Таблицы | [lab3/lab3_report.md](lab3/lab3_report.md) | ✅ |
 
 ## Интересные наблюдения
 

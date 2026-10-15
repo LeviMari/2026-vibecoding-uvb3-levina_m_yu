@@ -17,6 +17,7 @@ Telegram-бот на Python (`python-telegram-bot` 21, async). Принимае�
 | `/meetings`, `/review` | история встреч, итоги недели для руководителя |
 | `/calendar` | подключить Google Календарь (iCal-ссылка или файл `.ics`) |
 | `/stats` | личная статистика |
+| `/sheets` | онлайн-таблица: задачи и встречи в Google Таблице, обновляются сами раз в минуту |
 | `/export` | выгрузка задач и встреч в Excel |
 | `/feedback` | оставить отзыв |
 | `/survey` | опрос из 5 вопросов (включая готовность платить) (в 19:00 бот сам предлагает его тем, кто пользуется им от 6 часов) |
@@ -43,6 +44,7 @@ python bot.py
 - `TIMEZONE` — часовой пояс по умолчанию для новых пользователей (например, `Europe/Moscow`); каждый может сменить свой в `/settings`
 - `DB_PATH` — путь к базе SQLite, по умолчанию `bot.db`
 - `ADMIN_ID` — ваш Telegram user_id для `/admin`
+- `GOOGLE_SERVICE_ACCOUNT_JSON` (необязательно) — ключ сервисного аккаунта Google для `/sheets`: сам JSON или он же в base64 (`base64 -i key.json | pbcopy`). Без него `/sheets` предлагает выгрузку в Excel
 - `STT_MODEL` (необязательно) — модель распознавания речи на том же шлюзе (`{LLM_BASE_URL}/audio/transcriptions`). Если не задана, бот сам пробует `openai/gpt-4o-mini-transcribe`, затем `openai/whisper-1`
 
 При первом запуске со старым `data.json` бот сам перенесёт данные в SQLite, а файл переименует в `data.json.migrated`.
@@ -73,6 +75,15 @@ python bot.py
 
 Если секретный адрес отключён администратором (бывает в рабочих аккаунтах), экспортируйте календарь в `.ics` (Настройки → Импорт и экспорт) и пришлите файл боту.
 
+## Как включить онлайн-таблицы (`/sheets`)
+
+1. [console.cloud.google.com](https://console.cloud.google.com) → создать проект.
+2. «APIs & Services» → «Library» → включить **Google Sheets API**.
+3. «IAM & Admin» → «Service Accounts» → «Create service account» (роли не нужны).
+4. У созданного аккаунта: «Keys» → «Add key» → «Create new key» → JSON. Скачается файл ключа — **в репозиторий не класть**.
+5. В терминале: `base64 -i ~/Downloads/<файл>.json | pbcopy` и вставить значение в переменную `GOOGLE_SERVICE_ACCOUNT_JSON` на Railway.
+6. Пользователь создаёт пустую таблицу, даёт почте сервисного аккаунта доступ «Редактор» и присылает ссылку боту в `/sheets`.
+
 ## Структура
 
 - `bot.py` — запуск и регистрация обработчиков
@@ -83,5 +94,6 @@ python bot.py
 - `calendar_service.py` — чтение iCal, повторяющиеся встречи, занятость
 - `export.py` — выгрузка в Excel
 - `stt.py` — распознавание голосовых и записей встреч
+- `sheets_service.py` — онлайн-таблица в Google Таблицах
 - `jobs.py` — расписание уведомлений
 - `keyboards.py`, `dates.py`, `config.py` — кнопки, даты, настройки

@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 import calendar_service
 import llm
+import sheets_service
 import stt
 from config import ADMIN_ID, MAX_TXT_BYTES
 from dates import (
@@ -39,6 +40,7 @@ from keyboards import (
     MENU_HELP,
     MENU_MEETINGS,
     MENU_REVIEW,
+    MENU_SHEET,
     MENU_TASKS,
     MENU_TODAY,
     MENU_WEEK,
@@ -55,6 +57,7 @@ from keyboards import (
     open_tasks_keyboard,
     review_keyboard,
     settings_keyboard,
+    sheet_keyboard,
     timezone_keyboard,
     PRICE_OPTIONS,
     WOULD_USE_OPTIONS,
@@ -108,6 +111,7 @@ HELP_TEXT = (
     "/review — итоги недели для руководителя\n"
     "/calendar — Google Календарь (iCal или .ics)\n"
     "/stats — личная статистика\n"
+    "/sheets — онлайн-таблица задач в Google Таблицах\n"
     "/export — выгрузка в Excel\n"
     "/feedback — отзыв\n"
     "/survey — короткий опрос о боте\n"
@@ -730,6 +734,14 @@ async def send_history(update: Update, user: dict, date_from: str | None, date_t
 async def _handle_awaiting(update: Update, user: dict, text: str) -> bool:
     """True, если сообщение уже обработано как шаг диалога (календарь / отзыв)."""
     awaiting = user.get("awaiting") or ""
+    if awaiting == "sheet":
+        if "docs.google.com/spreadsheets" in text:
+            await _connect_sheet(update, user, text)
+            return True
+        # Написали что-то другое — выходим из режима подключения таблицы.
+        user["awaiting"] = ""
+        await store.save_user(user)
+        return False
     if awaiting == "calendar":
         if not text.strip().lower().startswith(("http://", "https://", "webcal://")):
             # Пользователь передумал и пишет что-то другое — выходим из режима календаря.
@@ -1235,6 +1247,65 @@ async def calendar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(CALENDAR_HELP)
 
 
+def _sheet_help() -> str:
+    email = sheets_service.service_email()
+    return (
+        "📊 Подключаем онлайн-таблицу — задачи и встречи будут в Google Таблицах "
+        "и обновляться сами, примерно раз в минуту.\n\n"
+        "1) Создай новую пустую таблицу: sheets.new (или sheets.google.com → «Пустая»).\n"
+        "2) Нажми «Настройки доступа» (справа вверху) и добавь редактором почту бота:\n"
+        f"<code>{esc(email)}</code>\n"
+        "(нажми на почту, чтобы скопировать; галочку «Уведомить» можно снять).\n"
+        "3) Скопируй ссылку на таблицу из адресной строки и пришли сюда.\n\n"
+        "<i>Таблица только для чтения: бот переписывает её целиком, правки руками не сохранятся. "
+        "Задачи меняй в боте.</i>"
+    )
+
+
+async def sheets_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Онлайн-таблица задач (по отзыву коллеги)."""
+    user = await store.get_user(update.effective_user.id, update.effective_chat.id)
+    if not sheets_service.is_configured():
+        await update.message.reply_text(
+            "Онлайн-таблица пока не настроена у бота. Можно выгрузить задачи в Excel — /export."
+        )
+        return
+    if user.get("sheet_id"):
+        await update.message.reply_text(
+            "Таблица подключена и обновляется сама.",
+            reply_markup=sheet_keyboard(sheets_service.sheet_url(user["sheet_id"])),
+        )
+        return
+    user["awaiting"] = "sheet"
+    await store.save_user(user)
+    await update.message.reply_text(_sheet_help(), parse_mode=HTML)
+
+
+async def _connect_sheet(update: Update, user: dict, text: str) -> None:
+    sheet_id = sheets_service.parse_sheet_id(text)
+    if not sheet_id:
+        await update.message.reply_text(
+            "Не вижу ссылки на Google Таблицу. Она выглядит так: "
+            "https://docs.google.com/spreadsheets/d/…\nПопробуй ещё раз или нажми /sheets."
+        )
+        return
+    status = await update.message.reply_text("Проверяю доступ и заполняю таблицу…")
+    try:
+        digest = await sheets_service.sync_user(user, sheet_id)
+    except sheets_service.SheetsError as exc:
+        await status.edit_text(exc.user_message + "\nПотом пришли ссылку ещё раз.")
+        return
+    user["awaiting"] = ""
+    await store.save_user(user)
+    await storage.set_user_sheet(user["user_id"], sheet_id)
+    await storage.set_sheet_hash(user["user_id"], digest)
+    await store.log_event(user["user_id"], "sheet_connect")
+    await status.edit_text(
+        "Готово! Задачи и встречи теперь в таблице и будут обновляться сами.",
+        reply_markup=sheet_keyboard(sheets_service.sheet_url(sheet_id)),
+    )
+
+
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _user(update)
     try:
@@ -1638,6 +1709,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await _survey_finish(query.message, user)
         return
 
+    if data == "sh:sync":
+        sheet_id = user.get("sheet_id")
+        if not sheet_id:
+            await query.edit_message_text("Таблица не подключена. Нажми /sheets.")
+            return
+        try:
+            digest = await sheets_service.sync_user(user, sheet_id)
+            await storage.set_sheet_hash(user["user_id"], digest)
+            await query.message.reply_text("Таблицу обновила ✅")
+        except sheets_service.SheetsError as exc:
+            await query.message.reply_text(exc.user_message)
+        return
+
+    if data == "sh:new":
+        user["awaiting"] = "sheet"
+        await store.save_user(user)
+        await query.message.reply_text(_sheet_help(), parse_mode=HTML)
+        return
+
+    if data == "sh:off":
+        await storage.set_user_sheet(user["user_id"], None)
+        await query.edit_message_text(
+            "Таблицу отключила — больше её не обновляю. Сама таблица осталась у тебя в Google Диске."
+        )
+        return
+
     if data == "ob:sample":
         # Пример саммари с именем пользователя — чтобы сразу увидеть, как бот находит задачи.
         name = user.get("name") or "Мария"
@@ -1747,5 +1844,6 @@ MENU_ACTIONS.update(
         MENU_REVIEW: review_cmd,
         MENU_HELP: help_cmd,
         MENU_CALENDAR: calendar_cmd,
+        MENU_SHEET: sheets_cmd,
     }
 )

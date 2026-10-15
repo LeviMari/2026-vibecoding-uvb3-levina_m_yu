@@ -1,0 +1,13 @@
+.env
+data.json
+*.migrated
+*.db
+*.db-wal
+*.db-shm
+*.xlsx
+.venv
+__pycache__/
+*.pyc
+.DS_Store
+# Ключи Google (сервисный аккаунт) — никогда не коммитить
+*.json

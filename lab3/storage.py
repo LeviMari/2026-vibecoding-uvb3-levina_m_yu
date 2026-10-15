@@ -139,6 +139,7 @@ def _user_from_db(user_id: int) -> dict[str, Any] | None:
         "pending_new_task": pending_task,
         "created_at": row["created_at"],
         "timezone": row["timezone"] if "timezone" in row.keys() else None,
+        "sheet_id": row["sheet_id"] if "sheet_id" in row.keys() else None,
     }
 
 
@@ -482,6 +483,28 @@ def get_user_tz(user_id: int) -> str | None:
 
 async def set_user_tz(user_id: int, name: str) -> None:
     execute("UPDATE users SET timezone = ? WHERE user_id = ?", (name, int(user_id)))
+
+
+# ---------- Онлайн-таблица Google ----------
+
+async def set_user_sheet(user_id: int, sheet_id: str | None) -> None:
+    """Подключить (или отключить, если None) таблицу. Отпечаток сбрасываем — перезаписать заново."""
+    execute(
+        "UPDATE users SET sheet_id = ?, sheet_hash = NULL WHERE user_id = ?",
+        (sheet_id, int(user_id)),
+    )
+
+
+async def set_sheet_hash(user_id: int, value: str | None) -> None:
+    execute("UPDATE users SET sheet_hash = ? WHERE user_id = ?", (value, int(user_id)))
+
+
+def sheet_users() -> list[dict]:
+    """Кому нужно синхронизировать таблицу: user_id, chat_id, sheet_id, sheet_hash."""
+    rows = query(
+        "SELECT user_id, chat_id, sheet_id, sheet_hash FROM users WHERE sheet_id IS NOT NULL"
+    )
+    return [dict(r) for r in rows]
 
 
 # ---------- Опрос тестировщиков и статистика для Лабы 3 ----------

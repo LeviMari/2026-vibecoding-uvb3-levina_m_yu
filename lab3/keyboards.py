@@ -177,6 +177,7 @@ MENU_MEETINGS = "Встречи"
 MENU_REVIEW = "Итоги недели"
 MENU_HELP = "Помощь"
 MENU_CALENDAR = "Календарь"
+MENU_SHEET = "Таблица"
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -188,7 +189,7 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
         [
             [MENU_TODAY, MENU_TASKS, MENU_WEEK],
             [MENU_MEETINGS, MENU_REVIEW],
-            [MENU_CALENDAR, MENU_HELP],
+            [MENU_CALENDAR, MENU_SHEET, MENU_HELP],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -237,6 +238,19 @@ def onboarding_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📎 Разобрать пример саммари", callback_data="ob:sample")],
             [InlineKeyboardButton("📅 Подключить календарь", callback_data="ob:cal")],
             [InlineKeyboardButton("🕐 Сменить часовой пояс", callback_data="ob:tz")],
+        ]
+    )
+
+
+def sheet_keyboard(url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📊 Открыть таблицу", url=url)],
+            [InlineKeyboardButton("🔄 Обновить сейчас", callback_data="sh:sync")],
+            [
+                InlineKeyboardButton("Другая таблица", callback_data="sh:new"),
+                InlineKeyboardButton("Отключить", callback_data="sh:off"),
+            ],
         ]
     )
 

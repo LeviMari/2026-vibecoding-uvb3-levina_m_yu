@@ -40,6 +40,7 @@ from handlers import (
     review_cmd,
     setname,
     settings_cmd,
+    sheets_cmd,
     start,
     stats_cmd,
     survey_cmd,
@@ -82,8 +83,9 @@ BOT_COMMANDS = [
     BotCommand("done", "Что сделано за неделю"),
     BotCommand("calendar", "Подключить календарь"),
     BotCommand("stats", "Моя статистика"),
+    BotCommand("sheets", "Онлайн-таблица задач"),
     BotCommand("export", "Выгрузка в Excel"),
-    BotCommand("settings", "Уведомления"),
+    BotCommand("settings", "Часовой пояс и уведомления"),
     BotCommand("feedback", "Оставить отзыв"),
     BotCommand("survey", "Короткий опрос о боте"),
     BotCommand("setname", "Как меня зовут на встречах"),
@@ -148,6 +150,7 @@ def main() -> None:
     application.add_handler(CommandHandler("calendar", calendar_cmd))
     application.add_handler(CommandHandler("stats", stats_cmd))
     application.add_handler(CommandHandler("export", export_cmd))
+    application.add_handler(CommandHandler("sheets", sheets_cmd))
     application.add_handler(CommandHandler("feedback", feedback_cmd))
     application.add_handler(CommandHandler("admin", admin_cmd))
     application.add_handler(CommandHandler("admin_export", admin_export_cmd))

@@ -361,6 +361,9 @@ def init_db() -> None:
         _add_column_if_missing("users", "survey_done_at", "TEXT")
         # Часовой пояс пользователя (NULL — пояс по умолчанию из TIMEZONE).
         _add_column_if_missing("users", "timezone", "TEXT")
+        # Онлайн-таблица Google (Лаба 3, по отзыву): id таблицы и отпечаток последней записи.
+        _add_column_if_missing("users", "sheet_id", "TEXT")
+        _add_column_if_missing("users", "sheet_hash", "TEXT")
         get_conn().commit()
     _migrate_from_json()
     logger.info("База данных готова")

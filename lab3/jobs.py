@@ -13,6 +13,8 @@ from telegram.ext import ContextTypes
 
 import calendar_service
 import llm
+import sheets_service
+import storage
 from dates import format_ru_date, get_tz, set_current_tz, today
 from handlers import _group_open_tasks, _review_payload, current_week_plan, ping_markup
 from keyboards import review_keyboard
@@ -221,6 +223,30 @@ async def hourly_tick(context: ContextTypes.DEFAULT_TYPE) -> None:
     set_current_tz(None)
 
 
+async def sync_sheets(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Раз в минуту: обновить онлайн-таблицы, где что-то поменялось.
+
+    Сравниваем отпечаток содержимого с последним записанным — если задачи и встречи
+    не менялись, в Google не ходим (у API есть лимиты на число запросов).
+    """
+    if not sheets_service.is_configured():
+        return
+    for row in storage.sheet_users():
+        set_current_tz(storage.get_user_tz(row["user_id"]))
+        try:
+            user = await store.get_user(row["user_id"], row["chat_id"])
+            task_rows, meeting_rows = sheets_service.build_values(user)
+            if sheets_service.fingerprint([task_rows, meeting_rows]) == row["sheet_hash"]:
+                continue
+            digest = await sheets_service.sync_user(user, row["sheet_id"])
+            await storage.set_sheet_hash(row["user_id"], digest)
+        except sheets_service.SheetsError as exc:
+            logger.warning("sheet sync failed for %s: %s", row["user_id"], exc.user_message)
+        except Exception:
+            logger.exception("sheet sync failed for %s", row["user_id"])
+    set_current_tz(None)
+
+
 def schedule(application) -> None:
     jq = application.job_queue
     if jq is None:
@@ -231,4 +257,5 @@ def schedule(application) -> None:
     first = (60 - now.minute) * 60 - now.second + 5
     jq.run_repeating(hourly_tick, interval=3600, first=first, name="hourly_tick")
     jq.run_repeating(after_meetings, interval=600, first=60, name="after_meeting")
+    jq.run_repeating(sync_sheets, interval=60, first=30, name="sync_sheets")
     logger.info("Расписание уведомлений включено: по местному времени каждого пользователя")

@@ -161,6 +161,46 @@ def fingerprint(values: Any) -> str:
 
 # ---------- Запись ----------
 
+# Ширина колонок в пикселях. Текст переносится по словам, поэтому длинные задачи
+# и пункты встречи видны целиком — строка просто становится выше.
+COLUMN_WIDTHS = {
+    TASKS_TITLE: [110, 420, 100, 100, 260, 100, 100],
+    MEETINGS_TITLE: [100, 260, 200, 420, 420],
+}
+
+
+def _apply_layout(book, ws, widths: list[int]) -> None:
+    """Перенос текста, выравнивание по верху и ширина колонок — одним запросом к API."""
+    requests = [
+        {
+            "repeatCell": {
+                "range": {"sheetId": ws.id},
+                "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"}},
+                "fields": "userEnteredFormat.wrapStrategy,userEnteredFormat.verticalAlignment",
+            }
+        }
+    ]
+    for i, width in enumerate(widths):
+        requests.append(
+            {
+                "updateDimensionProperties": {
+                    "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+                    "properties": {"pixelSize": width},
+                    "fields": "pixelSize",
+                }
+            }
+        )
+    # Высота строк — по содержимому (после переноса текста).
+    requests.append(
+        {
+            "autoResizeDimensions": {
+                "dimensions": {"sheetId": ws.id, "dimension": "ROWS", "startIndex": 0, "endIndex": ws.row_count}
+            }
+        }
+    )
+    book.batch_update({"requests": requests})
+
+
 def _write_sync(sheet_id: str, task_rows: list, meeting_rows: list) -> None:
     import gspread
 
@@ -168,14 +208,13 @@ def _write_sync(sheet_id: str, task_rows: list, meeting_rows: list) -> None:
         book = _get_client().open_by_key(sheet_id)
         titles = [ws.title for ws in book.worksheets()]
         if TASKS_TITLE not in titles:
-            first = book.sheet1
-            # Пустой первый лист новой таблицы переименовываем, а не плодим лишний.
-            if len(titles) == 1 and not first.get_all_values():
-                first.update_title(TASKS_TITLE)
-            else:
-                book.add_worksheet(TASKS_TITLE, rows=200, cols=7)
-        if MEETINGS_TITLE not in [ws.title for ws in book.worksheets()]:
-            book.add_worksheet(MEETINGS_TITLE, rows=100, cols=5)
+            book.add_worksheet(TASKS_TITLE, rows=200, cols=7, index=0)
+        if MEETINGS_TITLE not in titles:
+            book.add_worksheet(MEETINGS_TITLE, rows=100, cols=5, index=1)
+        # Пустой стандартный лист новой таблицы («Лист1» / «Sheet1») убираем, чтобы не путал.
+        for ws in book.worksheets():
+            if ws.title in ("Лист1", "Sheet1") and not any(any(c for c in r) for r in ws.get_all_values()):
+                book.del_worksheet(ws)
 
         for title, rows in ((TASKS_TITLE, task_rows), (MEETINGS_TITLE, meeting_rows)):
             ws = book.worksheet(title)
@@ -184,6 +223,7 @@ def _write_sync(sheet_id: str, task_rows: list, meeting_rows: list) -> None:
             last_col = chr(ord("A") + len(rows[0]) - 1)
             ws.format(f"A1:{last_col}1", {"textFormat": {"bold": True}})
             ws.freeze(rows=1)
+            _apply_layout(book, ws, COLUMN_WIDTHS[title])
     except gspread.exceptions.SpreadsheetNotFound:
         raise SheetsError(
             f"Не вижу таблицу. Открой «Настройки доступа» и добавь редактором {service_email()}"

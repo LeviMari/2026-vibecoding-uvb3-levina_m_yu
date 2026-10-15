@@ -336,7 +336,7 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # (у одного сообщения может быть только одна клавиатура).
     await update.message.reply_text(
         f"Запомнила: {name} (сменить — /setname).\n"
-        "👇 Внизу экрана теперь меню: Сегодня, Задачи, Неделя, Встречи, Итоги недели, Календарь.",
+        "👇 Внизу экрана теперь меню: Сегодня, Задачи, Неделя, Встречи, Итоги недели, Календарь, Таблица.",
         reply_markup=main_menu_keyboard(),
     )
     await update.message.reply_text(onboarding_text(name), reply_markup=onboarding_keyboard())

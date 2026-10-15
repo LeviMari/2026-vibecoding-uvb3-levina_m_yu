@@ -176,14 +176,19 @@ MENU_WEEK = "Неделя"
 MENU_MEETINGS = "Встречи"
 MENU_REVIEW = "Итоги недели"
 MENU_HELP = "Помощь"
+MENU_CALENDAR = "Календарь"
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Постоянное меню: самые частые действия в два ряда, без ярких эмодзи."""
+    """Постоянное меню: самые частые действия в три ряда, без ярких эмодзи.
+
+    Кнопку «Календарь» добавили по отзыву: коллега не нашла, как подключить календарь.
+    """
     return ReplyKeyboardMarkup(
         [
             [MENU_TODAY, MENU_TASKS, MENU_WEEK],
-            [MENU_MEETINGS, MENU_REVIEW, MENU_HELP],
+            [MENU_MEETINGS, MENU_REVIEW],
+            [MENU_CALENDAR, MENU_HELP],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -208,4 +213,35 @@ WOULD_USE_OPTIONS = [
 def survey_would_use_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(label, callback_data=f"sv:{key}") for key, label in WOULD_USE_OPTIONS]]
+    )
+
+
+PRICE_OPTIONS = [
+    ("0", "0 ₽"),
+    ("lt100", "до 100 ₽"),
+    ("100_300", "100–300 ₽"),
+    ("gt300", "300+ ₽"),
+]
+
+
+def survey_price_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=f"sp:{key}") for key, label in PRICE_OPTIONS]]
+    )
+
+
+def onboarding_keyboard() -> InlineKeyboardMarkup:
+    """Первые шаги после знакомства — чтобы не искать функции по /help."""
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📎 Разобрать пример саммари", callback_data="ob:sample")],
+            [InlineKeyboardButton("📅 Подключить календарь", callback_data="ob:cal")],
+            [InlineKeyboardButton("🕐 Сменить часовой пояс", callback_data="ob:tz")],
+        ]
+    )
+
+
+def calendar_connect_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("📅 Подключить календарь", callback_data="ob:cal")]]
     )

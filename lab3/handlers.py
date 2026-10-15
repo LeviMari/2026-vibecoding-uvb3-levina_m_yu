@@ -7,11 +7,12 @@ import html
 import logging
 from datetime import datetime, time, timedelta
 
-from telegram import Update
+from telegram import InputFile, Update
 from telegram.ext import ContextTypes, ConversationHandler
 
 import calendar_service
 import llm
+import stt
 from config import ADMIN_ID, MAX_TXT_BYTES
 from dates import (
     DAY_KEYS,
@@ -34,13 +35,16 @@ from dates import (
 import storage
 from export import ExportError, build_admin_xlsx, build_tasks_xlsx, export_filename
 from keyboards import (
+    MENU_CALENDAR,
     MENU_HELP,
     MENU_MEETINGS,
     MENU_REVIEW,
     MENU_TASKS,
     MENU_TODAY,
     MENU_WEEK,
+    calendar_connect_keyboard,
     calendar_keyboard,
+    onboarding_keyboard,
     main_menu_keyboard,
     clarify_keyboard,
     deadline_choice_keyboard,
@@ -52,7 +56,9 @@ from keyboards import (
     review_keyboard,
     settings_keyboard,
     timezone_keyboard,
+    PRICE_OPTIONS,
     WOULD_USE_OPTIONS,
+    survey_price_keyboard,
     survey_invite_keyboard,
     survey_would_use_keyboard,
     week_plan_keyboard,
@@ -62,6 +68,9 @@ from storage import PRIORITY_RU, STATUS_RU, new_id, now_iso, store
 logger = logging.getLogger(__name__)
 
 WAITING_NAME = 1
+
+# С какой длины сообщение считаем пересказом встречи, а не отдельной задачей.
+MEETING_TEXT_MIN_CHARS = 400
 
 CALENDAR_HELP = (
     "📅 Подключаем календарь — бот будет видеть твои встречи.\n\n"
@@ -82,11 +91,15 @@ CALENDAR_HELP = (
 
 HELP_TEXT = (
     "Я личный ассистент по задачам и встречам.\n\n"
-    "📎 Пришли .txt с саммари встречи — разберу и предложу задачи.\n"
+    "📎 Пришли саммари встречи (.txt), запись встречи (аудио до 60 мин) или наговори голосовым, "
+    "о чём договорились, — разберу и предложу задачи. Транскрибатор не нужен.\n"
     "✍️ Напиши задачу обычным текстом, например: «подготовить отчёт для Ани до пятницы, срочно».\n"
     "🔄 Можно писать «отчёт сделала», «перенеси презентацию на среду».\n"
-    "💬 Спрашивай про встречи: «что решили по бюджету?»\n\n"
-    "Частые действия — кнопками под полем ввода, все команды — в кнопке «Меню» слева.\n\n"
+    "💬 Спрашивай про встречи: «что решили по бюджету?»\n"
+    "🎙 Голосовым можно и задачу, и статус, и вопрос.\n"
+    "📅 Подключи Google Календарь кнопкой «Календарь» — план недели учтёт встречи.\n\n"
+    "Частые действия — кнопками под полем ввода. Если кнопок не видно, нажми значок "
+    "с четырьмя квадратиками справа в поле ввода. Все команды — в кнопке «Меню» слева.\n\n"
     "/tasks — открытые задачи\n"
     "/done — что сделано за неделю\n"
     "/today — встречи и задачи на сегодня\n"
@@ -243,6 +256,42 @@ def current_week_plan(user: dict) -> dict:
     return {}
 
 
+SAMPLE_SUMMARY = """Встреча: Подготовка к запуску рассылки
+Дата: {date}
+Участники: {name}, Анна, Пётр
+
+Обсудили:
+- Запуск email-рассылки для клиентов переносим на следующую неделю.
+- Нужно обновить шаблон письма и проверить ссылки.
+- Бюджет на рекламу согласован: 50 000 ₽.
+
+Решения:
+- Анна готовит тексты писем.
+- Пётр настраивает сегментацию базы.
+
+Задачи:
+- {name}: обновить шаблон письма до {deadline}.
+- {name}: согласовать с юристами текст согласия на рассылку до пятницы.
+- Пётр: выгрузить базу клиентов до среды.
+"""
+
+
+def onboarding_text(name: str) -> str:
+    """Короткий старт вместо длинного /help — по отзыву, что функции сложно найти."""
+    return (
+        f"Готово, {name}! С чего начать:\n\n"
+        "1️⃣ После встречи пришли что есть — я найду твои задачи:\n"
+        "   • саммари файлом .txt;\n"
+        "   • запись встречи (аудио до 60 минут);\n"
+        "   • или просто наговори голосовым за минуту, о чём договорились.\n"
+        "   Хочешь посмотреть, как это работает? Нажми «Разобрать пример саммари».\n"
+        "2️⃣ Подключи Google Календарь — план недели учтёт встречи.\n"
+        f"3️⃣ Проверь часовой пояс: сейчас {tz_label()}.\n\n"
+        "Задачи можно писать текстом или наговаривать голосовым 🎙\n"
+        "Остальное — в меню внизу экрана. Полный список команд — /help."
+    )
+
+
 def _has_calendar(user: dict) -> bool:
     return bool(user.get("calendar_url") or user.get("calendar_ics"))
 
@@ -281,11 +330,14 @@ async def receive_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     user = await _user(update)
     user["name"] = name
     await store.save_user(user)
+    # Два сообщения: первое ставит постоянное меню внизу, второе — кнопки первых шагов
+    # (у одного сообщения может быть только одна клавиатура).
     await update.message.reply_text(
-        f"Запомнила: {name}. Можно менять командой /setname.\n"
-        f"Часовой пояс: {tz_label()} — сменить можно в /settings.\n\n{HELP_TEXT}",
+        f"Запомнила: {name} (сменить — /setname).\n"
+        "👇 Внизу экрана теперь меню: Сегодня, Задачи, Неделя, Встречи, Итоги недели, Календарь.",
         reply_markup=main_menu_keyboard(),
     )
+    await update.message.reply_text(onboarding_text(name), reply_markup=onboarding_keyboard())
     return ConversationHandler.END
 
 
@@ -357,9 +409,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _save_calendar(update, user, url=None, ics_text=text)
         return
 
+    if filename.endswith(stt.AUDIO_EXTENSIONS):
+        await _process_audio(update, doc, doc.file_name or "meeting.m4a", meeting=True)
+        return
+
     user = await _user(update)
     if not filename.endswith(".txt"):
-        await update.message.reply_text("Нужен текстовый файл .txt — другие форматы не разбираю.")
+        await update.message.reply_text(
+            "Разбираю саммари в .txt и записи встреч (аудио: .m4a, .mp3, .ogg и др.). "
+            "Этот формат не поддерживаю."
+        )
         return
     if doc.file_size and doc.file_size > MAX_TXT_BYTES:
         await update.message.reply_text(
@@ -387,7 +446,20 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if not text.strip():
             await status.edit_text("Файл пустой.")
             return
+    except Exception:
+        logger.exception("Ошибка чтения файла встречи")
+        await status.edit_text("Не получилось прочитать файл. Попробуй ещё раз.")
+        return
+    await process_meeting_text(user, text, status)
 
+
+async def process_meeting_text(user: dict, text: str, status) -> None:
+    """Разбор текста встречи: LLM → встреча в историю + предложенные задачи.
+
+    status — уже отправленное сообщение «Читаю саммари…», его редактируем результатом.
+    Используется и для файлов .txt, и для кнопки «Разобрать пример саммари».
+    """
+    try:
         # Отпечаток содержимого: тот же файл второй раз не разбираем и не дублируем встречу.
         source_hash = hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
         duplicate = next(
@@ -736,8 +808,83 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if action:
         await action(update, context)
         return
+    await route_text(update, text)
+
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Голосовое сообщение или аудиофайл.
+
+    Добавлено по отзывам коллег:
+    - задачи удобнее наговаривать, чем печатать;
+    - транскрибатора встреч нет — поэтому можно прислать запись встречи
+      или просто наговорить после встречи, о чём договорились.
+    Голосовое распознаём и обрабатываем как обычный текст (длинное — как пересказ встречи),
+    аудиофайл всегда считаем записью встречи.
+    """
+    if update.message.voice:
+        await _process_audio(update, update.message.voice, "voice.ogg", meeting=False)
+    elif update.message.audio:
+        media = update.message.audio
+        await _process_audio(update, media, media.file_name or "meeting.mp3", meeting=True)
+
+
+async def _process_audio(update: Update, media, filename: str, *, meeting: bool) -> None:
+    limit = stt.MAX_MEETING_SECONDS if meeting else stt.MAX_VOICE_SECONDS
+    if getattr(media, "duration", None) and media.duration > limit:
+        await update.message.reply_text(
+            f"Запись длиннее {limit // 60} минут — раздели её на части, пожалуйста."
+        )
+        return
+    if media.file_size and media.file_size > stt.MAX_AUDIO_BYTES:
+        await update.message.reply_text(
+            "Файл больше 20 МБ — Telegram не даёт ботам скачивать такие. "
+            "Сожми запись (например, в .m4a или .mp3 пониже качеством) или раздели на части."
+        )
+        return
+    user = await store.get_user(update.effective_user.id, update.effective_chat.id)
+    if meeting and not user.get("name"):
+        await update.message.reply_text(
+            "Сначала скажи, как тебя зовут на встречах — команда /setname. "
+            "Иначе я могу перепутать, чьи это задачи."
+        )
+        return
+    status = await update.message.reply_text(
+        "🎙 Расшифровываю запись встречи — это может занять пару минут…" if meeting else "🎙 Слушаю…"
+    )
+    try:
+        tg_file = await media.get_file()
+        audio = bytes(await tg_file.download_as_bytearray())
+        text = await stt.transcribe(audio, filename)
+    except stt.STTError as exc:
+        await status.edit_text(exc.user_message)
+        return
+    except Exception:
+        logger.exception("Ошибка обработки аудио")
+        await status.edit_text("Не получилось обработать запись. Попробуй ещё раз или напиши текстом.")
+        return
+    await store.log_event(user["user_id"], "voice")
+    if meeting:
+        await status.edit_text("Расшифровала запись. Разбираю встречу и достаю задачи…")
+        await process_meeting_text(user, text, status)
+        return
+    shown = text if len(text) <= 500 else text[:500] + "…"
+    await status.edit_text(f"🎙 Распознала: «{shown}»")
+    await route_text(update, text)
+
+
+async def route_text(update: Update, text: str) -> None:
+    """Общая логика для текста и распознанного голосового."""
     user = await store.get_user(update.effective_user.id, update.effective_chat.id)
     if await _handle_awaiting(update, user, text):
+        return
+
+    # Длинный текст — это пересказ или заметки встречи (вставили текстом или наговорили
+    # голосовым), а не одна задача. Разбираем как саммари встречи.
+    if len(text) >= MEETING_TEXT_MIN_CHARS and user.get("name"):
+        status = await update.message.reply_text(
+            "Похоже на итоги встречи — разбираю и достаю задачи…"
+        )
+        await process_meeting_text(user, text, status)
         return
 
     has_open = any(t.get("status") != "done" for t in user.get("tasks", []))
@@ -921,6 +1068,8 @@ async def send_week_plan(update: Update, user: dict, rebuild: bool) -> None:
     await store.save_user(user)
     await store.log_event(user["user_id"], "week")
     text = _format_week_plan(user, plan, occupancy)
+    if not _has_calendar(user):
+        text += "\n\n<i>📅 Подключи календарь (кнопка «Календарь» в меню) — план учтёт твои встречи.</i>"
     if update.callback_query:
         await update.callback_query.edit_message_text(text, parse_mode=HTML, reply_markup=week_plan_keyboard())
     else:
@@ -955,6 +1104,8 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         else:
             parts.append("<i>Встреч в календаре на сегодня нет.</i>")
+    else:
+        parts.append("<i>📅 Календарь не подключён — тогда здесь будут и встречи.</i>")
 
     groups = _group_open_tasks(user.get("tasks") or [])
     if groups["overdue"]:
@@ -979,7 +1130,11 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(parts) == 1:
         parts.append("<i>На сегодня ничего не запланировано.</i>")
 
-    await update.message.reply_text("\n\n".join(parts), parse_mode=HTML)
+    await update.message.reply_text(
+        "\n\n".join(parts),
+        parse_mode=HTML,
+        reply_markup=None if _has_calendar(user) else calendar_connect_keyboard(),
+    )
 
 
 async def meetings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1154,6 +1309,8 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Ошибка статистики опроса")
         survey, actions = {"done": 0, "would_use": {}}, []
     lines.append(f"Прошли опрос: {survey['done']}")
+    if survey.get("price"):
+        lines.append("Готовы платить: " + ", ".join(f"{k} — {v}" for k, v in survey["price"].items()))
     if survey["would_use"]:
         lines.append(
             "Будут пользоваться: "
@@ -1175,11 +1332,12 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------- Опрос тестировщиков (Лаба 3) ----------
 # Вопросы из методички: что понравилось, что нет, что улучшить, пользовались бы дальше.
 SURVEY_QUESTIONS = [
-    ("liked", "1/4. Что понравилось в боте? Что оказалось полезным?"),
-    ("disliked", "2/4. Что не понравилось, мешало или работало не так, как ты ожидал(а)?"),
-    ("improve", "3/4. Что улучшить или добавить, чтобы ботом было удобнее пользоваться?"),
+    ("liked", "1/5. Что понравилось в боте? Что оказалось полезным?"),
+    ("disliked", "2/5. Что не понравилось, мешало или работало не так, как ты ожидал(а)?"),
+    ("improve", "3/5. Что улучшить или добавить, чтобы ботом было удобнее пользоваться?"),
 ]
-SURVEY_LAST = "4/4. Пользовался(-ась) бы ботом дальше?"
+SURVEY_LAST = "4/5. Пользовался(-ась) бы ботом дальше?"
+SURVEY_PRICE = "5/5. Сколько ты был(а) бы готов(а) платить за такого бота в месяц?"
 
 
 async def _survey_start(message, user: dict) -> None:
@@ -1187,7 +1345,7 @@ async def _survey_start(message, user: dict) -> None:
     await store.save_user(user)
     await store.log_event(user["user_id"], "survey_start")
     await message.reply_text(
-        "Спасибо, что пробуешь бота! 4 коротких вопроса — отвечай как удобно, хоть одним словом. "
+        "Спасибо, что пробуешь бота! 5 коротких вопросов — отвечай как удобно, хоть одним словом. "
         "Это поможет его улучшить.\n\n" + SURVEY_QUESTIONS[0][1]
     )
 
@@ -1197,9 +1355,13 @@ async def _survey_answer(update: Update, user: dict, awaiting: str, text: str) -
         idx = int(awaiting.split(":", 1)[1])
     except ValueError:
         idx = 0
-    if idx >= len(SURVEY_QUESTIONS):
-        # Последний вопрос можно ответить и текстом вместо кнопки.
+    if idx == len(SURVEY_QUESTIONS):
+        # Вопросы с кнопками можно ответить и текстом.
         await storage.save_survey_answer(user["user_id"], "would_use", text.strip())
+        await _survey_ask_price(update.message, user)
+        return
+    if idx > len(SURVEY_QUESTIONS):
+        await storage.save_survey_answer(user["user_id"], "price", text.strip())
         await _survey_finish(update.message, user)
         return
     key, _ = SURVEY_QUESTIONS[idx]
@@ -1211,6 +1373,12 @@ async def _survey_answer(update: Update, user: dict, awaiting: str, text: str) -
         await update.message.reply_text(SURVEY_QUESTIONS[idx][1])
     else:
         await update.message.reply_text(SURVEY_LAST, reply_markup=survey_would_use_keyboard())
+
+
+async def _survey_ask_price(message, user: dict) -> None:
+    user["awaiting"] = f"survey:{len(SURVEY_QUESTIONS) + 1}"
+    await store.save_user(user)
+    await message.reply_text(SURVEY_PRICE, reply_markup=survey_price_keyboard())
 
 
 async def _survey_finish(message, user: dict) -> None:
@@ -1456,8 +1624,49 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.message.reply_text("Опрос уже завершён — спасибо! Начать заново: /survey")
             return
         await storage.save_survey_answer(user["user_id"], "would_use", label)
-        await _survey_finish(query.message, user)
         await query.edit_message_reply_markup(reply_markup=None)
+        await _survey_ask_price(query.message, user)
+        return
+
+    if data.startswith("sp:"):
+        label = dict(PRICE_OPTIONS).get(data.split(":", 1)[1])
+        if not label or user.get("awaiting") != "survey:4":
+            await query.message.reply_text("Опрос уже завершён — спасибо! Начать заново: /survey")
+            return
+        await storage.save_survey_answer(user["user_id"], "price", label)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await _survey_finish(query.message, user)
+        return
+
+    if data == "ob:sample":
+        # Пример саммари с именем пользователя — чтобы сразу увидеть, как бот находит задачи.
+        name = user.get("name") or "Мария"
+        d0 = today()
+        sample = SAMPLE_SUMMARY.format(
+            name=name,
+            date=d0.strftime("%d.%m.%Y"),
+            deadline=format_ru_date(d0 + timedelta(days=2)),
+        )
+        await query.message.reply_document(
+            InputFile(sample.encode("utf-8"), filename="пример_саммари.txt"),
+            caption="Пример саммари. Свои встречи присылай так же — файлом .txt.",
+        )
+        status = await query.message.reply_text("Читаю саммари и достаю задачи…")
+        await process_meeting_text(user, sample, status)
+        return
+
+    if data == "ob:cal":
+        user["awaiting"] = "calendar"
+        await store.save_user(user)
+        await query.message.reply_text(CALENDAR_HELP)
+        return
+
+    if data == "ob:tz":
+        await query.message.reply_text(
+            f"Сейчас: <b>{esc(tz_label())}</b>\nВыбери свой часовой пояс:",
+            parse_mode=HTML,
+            reply_markup=timezone_keyboard(get_tz_name()),
+        )
         return
 
     if data == "st:tz":
@@ -1537,5 +1746,6 @@ MENU_ACTIONS.update(
         MENU_MEETINGS: meetings_cmd,
         MENU_REVIEW: review_cmd,
         MENU_HELP: help_cmd,
+        MENU_CALENDAR: calendar_cmd,
     }
 )

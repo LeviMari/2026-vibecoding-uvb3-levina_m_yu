@@ -140,7 +140,8 @@ async def after_meetings(context: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 await context.bot.send_message(
                     _chat_id(user),
-                    f"Встреча «{event['title']}» закончилась. Пришли саммари — разберу задачи.",
+                    f"Встреча «{event['title']}» закончилась. Пришли саммари, запись "
+                    "или наговори голосовым, о чём договорились, — разберу задачи.",
                 )
             except Exception:
                 logger.exception("after-meeting send failed for %s", user.get("user_id"))
@@ -157,7 +158,7 @@ async def send_survey_invites(bot, candidates: list[dict]) -> int:
             await bot.send_message(
                 int(c.get("chat_id") or c["user_id"]),
                 "Поделишься впечатлениями о боте? "
-                "4 вопроса, около минуты — это поможет сделать его удобнее.",
+                "5 коротких вопросов, около минуты — это поможет сделать его удобнее.",
                 reply_markup=survey_invite_keyboard(),
             )
             await storage.mark_survey(c["user_id"], invited=True)

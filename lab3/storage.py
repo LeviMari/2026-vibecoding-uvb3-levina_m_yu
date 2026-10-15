@@ -528,9 +528,13 @@ async def survey_overview() -> dict[str, Any]:
     would = query(
         "SELECT answer, COUNT(*) AS n FROM survey_answers WHERE question = 'would_use' GROUP BY answer"
     )
+    price = query(
+        "SELECT answer, COUNT(*) AS n FROM survey_answers WHERE question = 'price' GROUP BY answer"
+    )
     return {
         "done": int(done["n"] if done else 0),
         "would_use": {r["answer"]: int(r["n"]) for r in would},
+        "price": {r["answer"]: int(r["n"]) for r in price},
     }
 
 

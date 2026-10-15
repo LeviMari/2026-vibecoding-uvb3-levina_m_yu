@@ -32,6 +32,7 @@ from handlers import (
     feedback_cmd,
     handle_document,
     handle_text,
+    handle_voice,
     help_cmd,
     meetings_cmd,
     on_callback,
@@ -154,6 +155,7 @@ def main() -> None:
     application.add_handler(CommandHandler("survey", survey_cmd))
     application.add_handler(CommandHandler("settings", settings_cmd))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     application.add_handler(CallbackQueryHandler(on_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_error_handler(on_error)

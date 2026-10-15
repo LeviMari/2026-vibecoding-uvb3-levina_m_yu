@@ -1,6 +1,10 @@
 """Распознавание голосовых сообщений и записей встреч (speech-to-text).
 
-Используем тот же OpenAI-совместимый шлюз, что и для текста. Пробуем два способа:
+Если в .env заданы STT_BASE_URL и STT_API_KEY — используем отдельный сервис распознавания
+(например, бесплатный Groq: https://api.groq.com/openai/v1, модель whisper-large-v3-turbo).
+Это понадобилось, потому что ключ LLM-шлюза курса открывает только текстовые модели.
+
+Иначе используем тот же OpenAI-совместимый шлюз, что и для текста. Пробуем два способа:
 1) POST {LLM_BASE_URL}/audio/transcriptions — классический Whisper-подобный API;
 2) POST {LLM_BASE_URL}/chat/completions с аудио внутри сообщения (input_audio) —
    так работают мультимодальные модели (например, Gemini), если шлюз не даёт
@@ -27,14 +31,28 @@ def _env_list(name: str) -> list[str]:
     return [x.strip() for x in os.getenv(name, "").split(",") if x.strip()]
 
 
-TRANSCRIBE_MODELS = list(dict.fromkeys(
-    _env_list("STT_MODEL") + ["openai/gpt-4o-mini-transcribe", "openai/whisper-1", "whisper-1"]
-))
-CHAT_AUDIO_MODELS = list(dict.fromkeys(
-    _env_list("STT_CHAT_MODELS")
-    + ["google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "google/gemini-2.0-flash-001",
-       "openai/gpt-4o-audio-preview"]
-))
+# Отдельный сервис распознавания (если задан) или тот же шлюз, что и для текста.
+STT_BASE_URL = (os.getenv("STT_BASE_URL", "").strip() or LLM_BASE_URL).rstrip("/")
+STT_API_KEY = os.getenv("STT_API_KEY", "").strip() or LLM_API_KEY
+SEPARATE_SERVICE = bool(os.getenv("STT_API_KEY", "").strip())
+# Распознавание включено только при отдельном сервисе: ключ LLM-шлюза курса открывает
+# лишь текстовые модели (gpt-5.4-mini, glm-5.3), проверено командой /admin_stt.
+ENABLED = SEPARATE_SERVICE
+
+if SEPARATE_SERVICE:
+    TRANSCRIBE_MODELS = list(dict.fromkeys(
+        _env_list("STT_MODEL") + ["whisper-large-v3-turbo", "whisper-large-v3"]
+    ))
+    CHAT_AUDIO_MODELS: list[str] = []
+else:
+    TRANSCRIBE_MODELS = list(dict.fromkeys(
+        _env_list("STT_MODEL") + ["openai/gpt-4o-mini-transcribe", "openai/whisper-1", "whisper-1"]
+    ))
+    CHAT_AUDIO_MODELS = list(dict.fromkeys(
+        _env_list("STT_CHAT_MODELS")
+        + ["google/gemini-2.5-flash", "google/gemini-2.5-flash-lite", "google/gemini-2.0-flash-001",
+           "openai/gpt-4o-audio-preview"]
+    ))
 
 # Голосовое-реплика (задача, вопрос, пересказ встречи) — до 10 минут.
 MAX_VOICE_SECONDS = 600
@@ -75,7 +93,7 @@ def _ext(filename: str) -> str:
 
 
 def _headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {LLM_API_KEY}"}
+    return {"Authorization": f"Bearer {STT_API_KEY}"}
 
 
 def _note_error(kind: str, model: str, response: httpx.Response) -> None:
@@ -88,7 +106,7 @@ def _note_error(kind: str, model: str, response: httpx.Response) -> None:
 
 async def _try_transcriptions(client, model: str, audio: bytes, filename: str) -> str | None:
     response = await client.post(
-        f"{LLM_BASE_URL}/audio/transcriptions",
+        f"{STT_BASE_URL}/audio/transcriptions",
         headers=_headers(),
         data={"model": model, "language": "ru"},
         files={"file": (filename, audio, _MIME.get(_ext(filename), "audio/ogg"))},
@@ -123,7 +141,7 @@ async def _try_chat(client, model: str, audio: bytes, filename: str) -> str | No
             }
         ],
     }
-    response = await client.post(f"{LLM_BASE_URL}/chat/completions", headers=_headers(), json=payload)
+    response = await client.post(f"{STT_BASE_URL}/chat/completions", headers=_headers(), json=payload)
     if response.status_code >= 400:
         _note_error("chat", model, response)
         return None
@@ -138,8 +156,8 @@ async def _try_chat(client, model: str, audio: bytes, filename: str) -> str | No
 async def transcribe(audio: bytes, filename: str = "voice.ogg") -> str:
     """Возвращает распознанный текст или бросает STTError."""
     global _working
-    if not LLM_API_KEY:
-        raise STTError("Не задан LLM_API_KEY — голосовые распознать не получится.")
+    if not STT_API_KEY:
+        raise STTError("Не задан ключ распознавания (STT_API_KEY) — голосовые распознать не получится.")
 
     if _working:
         attempts = [_working]
@@ -178,7 +196,7 @@ async def transcribe(audio: bytes, filename: str = "voice.ogg") -> str:
 async def audio_models() -> list[str]:
     """Модели шлюза, похожие на умеющие работать со звуком (для /admin_stt)."""
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(f"{LLM_BASE_URL}/models", headers=_headers())
+        response = await client.get(f"{STT_BASE_URL}/models", headers=_headers())
     response.raise_for_status()
     ids = [m.get("id", "") for m in response.json().get("data", [])]
     keys = ("whisper", "transcri", "audio", "gemini", "voxtral", "speech", "stt")
@@ -186,6 +204,7 @@ async def audio_models() -> list[str]:
 
 
 def status() -> str:
+    where = "отдельный сервис" if SEPARATE_SERVICE else "шлюз LLM"
     if _working:
-        return f"работает: {_working[0]} / {_working[1]}"
-    return "рабочий вариант пока не найден"
+        return f"{where}, работает: {_working[0]} / {_working[1]}"
+    return f"{where}, рабочий вариант пока не найден"

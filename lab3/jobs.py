@@ -142,8 +142,8 @@ async def after_meetings(context: ContextTypes.DEFAULT_TYPE) -> None:
             try:
                 await context.bot.send_message(
                     _chat_id(user),
-                    f"Встреча «{event['title']}» закончилась. Пришли саммари, запись "
-                    "или наговори голосовым, о чём договорились, — разберу задачи.",
+                    f"Встреча «{event['title']}» закончилась. Пришли саммари или просто напиши, "
+                    "о чём договорились, — разберу задачи.",
                 )
             except Exception:
                 logger.exception("after-meeting send failed for %s", user.get("user_id"))

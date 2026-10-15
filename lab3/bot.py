@@ -25,6 +25,7 @@ from handlers import (
     admin_cmd,
     admin_export_cmd,
     admin_invite_cmd,
+    admin_stt_cmd,
     calendar_cmd,
     cancel_name,
     done_cmd,
@@ -155,6 +156,7 @@ def main() -> None:
     application.add_handler(CommandHandler("admin", admin_cmd))
     application.add_handler(CommandHandler("admin_export", admin_export_cmd))
     application.add_handler(CommandHandler("admin_invite", admin_invite_cmd))
+    application.add_handler(CommandHandler("admin_stt", admin_stt_cmd))
     application.add_handler(CommandHandler("survey", survey_cmd))
     application.add_handler(CommandHandler("settings", settings_cmd))
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))

@@ -1465,6 +1465,22 @@ async def survey_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await _survey_start(update.message, user)
 
 
+async def admin_stt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Диагностика распознавания речи (только для админа): какие аудиомодели есть на шлюзе
+    и что шлюз ответил при последней неудачной попытке."""
+    if not ADMIN_ID or update.effective_user.id != ADMIN_ID:
+        return
+    lines = [f"<b>Распознавание речи</b>: {esc(stt.status())}"]
+    try:
+        models = await stt.audio_models()
+        lines.append("<b>Подходящие модели на шлюзе</b>:\n" + ("\n".join(esc(m) for m in models[:40]) or "нет"))
+    except Exception as exc:
+        lines.append(f"Список моделей получить не удалось: {esc(type(exc).__name__)}")
+    if stt.last_errors:
+        lines.append("<b>Последние ошибки</b>:\n" + "\n".join(esc(e) for e in stt.last_errors[-8:]))
+    await update.message.reply_text("\n\n".join(lines)[:4000], parse_mode=HTML)
+
+
 async def admin_invite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ручная рассылка приглашения в опрос всем, кто ещё его не прошёл (только админ)."""
     user = await _user(update)

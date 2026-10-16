@@ -75,6 +75,10 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # Список команд для кнопки «Меню» слева от поля ввода в Telegram.
+# Только новые сообщения. Отредактированное сообщение приходит как edited_message,
+# у него update.message = None — раньше это роняло обработчик (AttributeError в логах 16.10).
+NEW_MSG = filters.UpdateType.MESSAGE
+
 BOT_COMMANDS = [
     BotCommand("today", "Встречи и задачи на сегодня"),
     BotCommand("tasks", "Открытые задачи"),
@@ -127,7 +131,7 @@ def main() -> None:
         ],
         states={
             WAITING_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_name),
+                MessageHandler(NEW_MSG & filters.TEXT & ~filters.COMMAND, receive_name),
             ],
         },
         fallbacks=[
@@ -159,10 +163,10 @@ def main() -> None:
     application.add_handler(CommandHandler("admin_stt", admin_stt_cmd))
     application.add_handler(CommandHandler("survey", survey_cmd))
     application.add_handler(CommandHandler("settings", settings_cmd))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    application.add_handler(MessageHandler(NEW_MSG & filters.Document.ALL, handle_document))
+    application.add_handler(MessageHandler(NEW_MSG & (filters.VOICE | filters.AUDIO), handle_voice))
     application.add_handler(CallbackQueryHandler(on_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(NEW_MSG & filters.TEXT & ~filters.COMMAND, handle_text))
     application.add_error_handler(on_error)
 
     schedule(application)
